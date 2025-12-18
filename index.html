@@ -86,6 +86,17 @@
             font-weight: 500;
         }
 
+        .debug {
+            background: #fffacd;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 10px;
+            font-size: 0.85em;
+            color: #333;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
         .game-info {
             text-align: center;
             margin-bottom: 25px;
@@ -254,6 +265,7 @@
             font-size: 1.1em;
             transition: all 0.3s ease;
             background: rgba(255, 255, 255, 0.9);
+            text-transform: uppercase;
         }
 
         input:focus {
@@ -359,6 +371,8 @@
                 <div class="status" id="status">Waiting for opponent...</div>
             </div>
 
+            <div class="debug" id="debug">Debug: Starting...</div>
+
             <div class="player-info">
                 <div class="player" id="player1">Player 1 (X)</div>
                 <div class="player" id="player2">Player 2 (O)</div>
@@ -394,12 +408,21 @@
             isMyTurn: false
         };
 
+        function log(msg) {
+            const debug = document.getElementById('debug');
+            if (debug) {
+                debug.innerHTML += '<br>' + msg;
+                debug.scrollTop = debug.scrollHeight;
+            }
+            console.log(msg);
+        }
+
         try {
             app = firebase.initializeApp(firebaseConfig);
             database = firebase.database();
-            console.log("Firebase initialized successfully!");
+            log("✅ Firebase initialized!");
         } catch (error) {
-            console.error("Firebase initialization error:", error);
+            log("❌ Firebase error: " + error.message);
         }
 
         function generateGameCode() {
@@ -411,6 +434,8 @@
             gameState.gameCode = code;
             gameState.playerSymbol = 'X';
 
+            log("Creating game: " + code);
+
             currentGameRef = database.ref('games/' + code);
             
             currentGameRef.set({
@@ -418,20 +443,22 @@
                 currentPlayer: 'X',
                 players: 1,
                 gameActive: false,
-                player1: true,
-                player2: false,
+                player1Ready: true,
+                player2Ready: false,
                 createdAt: Date.now()
             }).then(() => {
+                log("✅ Game created in Firebase");
                 document.querySelector('.menu').style.display = 'none';
                 document.querySelector('.game').style.display = 'block';
                 document.getElementById('displayCode').textContent = code;
                 
                 initBoard();
-                updateStatus('📤 Share code with your friend!');
+                updateStatus('📤 Share code: ' + code);
                 
                 listenToGameChanges();
             }).catch(error => {
-                alert("❌ Error creating game: " + error.message);
+                log("❌ Create error: " + error.message);
+                alert("Error: " + error.message);
             });
         }
 
@@ -439,19 +466,23 @@
             const code = document.getElementById('joinCode').value.toUpperCase().trim();
             
             if (!code || code.length !== 6) {
-                alert('⚠️ Please enter a valid 6-letter game code!');
+                alert('⚠️ Enter a 6-letter code!');
                 return;
             }
+
+            log("Joining game: " + code);
 
             currentGameRef = database.ref('games/' + code);
             
             currentGameRef.once('value').then(snapshot => {
                 if (!snapshot.exists()) {
-                    alert('❌ Game not found! Check the code and try again.');
+                    log("❌ Game not found");
+                    alert('❌ Game not found!');
                     return;
                 }
 
                 const game = snapshot.val();
+                log("Found game: " + JSON.stringify(game));
                 
                 if (game.players >= 2) {
                     alert('⚠️ Game is full!');
@@ -464,8 +495,9 @@
                 currentGameRef.update({
                     players: 2,
                     gameActive: true,
-                    player2: true
+                    player2Ready: true
                 }).then(() => {
+                    log("✅ Joined game as Player 2");
                     document.querySelector('.menu').style.display = 'none';
                     document.querySelector('.game').style.display = 'block';
                     document.getElementById('displayCode').textContent = code;
@@ -474,7 +506,8 @@
                     listenToGameChanges();
                 });
             }).catch(error => {
-                alert("❌ Error joining game: " + error.message);
+                log("❌ Join error: " + error.message);
+                alert("Error: " + error.message);
             });
         }
 
@@ -492,35 +525,62 @@
         }
 
         function makeMove(index) {
+            log("Attempting move at: " + index);
+            
             currentGameRef.once('value').then(snapshot => {
                 const game = snapshot.val();
                 
-                if (!game || !game.gameActive) {
-                    updateStatus('⏳ Waiting for opponent to join...');
+                if (!game) {
+                    log("❌ No game data");
                     return;
                 }
 
-                if (game.board[index] || game.currentPlayer !== gameState.playerSymbol) {
-                    if (game.currentPlayer !== gameState.playerSymbol) {
-                        updateStatus('⏸️ Wait for your turn!');
-                    }
+                log("Game state - Active: " + game.gameActive + ", Current: " + game.currentPlayer + ", You: " + gameState.playerSymbol);
+                
+                if (!game.gameActive) {
+                    updateStatus('⏳ Waiting for Player 2...');
+                    log("Game not active yet");
+                    return;
+                }
+
+                if (game.board[index]) {
+                    log("Cell already taken");
+                    return;
+                }
+
+                if (game.currentPlayer !== gameState.playerSymbol) {
+                    updateStatus('⏸️ Wait for your turn!');
+                    log("Not your turn");
                     return;
                 }
 
                 const newBoard = [...game.board];
                 newBoard[index] = gameState.playerSymbol;
 
+                log("✅ Making move: " + gameState.playerSymbol + " at " + index);
+
                 currentGameRef.update({
                     board: newBoard,
                     currentPlayer: game.currentPlayer === 'X' ? 'O' : 'X'
+                }).then(() => {
+                    log("Move saved to Firebase");
                 });
+            }).catch(error => {
+                log("❌ Move error: " + error.message);
             });
         }
 
         function listenToGameChanges() {
+            log("👂 Listening for changes...");
+            
             currentGameRef.on('value', snapshot => {
                 const game = snapshot.val();
-                if (!game) return;
+                if (!game) {
+                    log("❌ No game data in listener");
+                    return;
+                }
+
+                log("Update - Players: " + game.players + ", Active: " + game.gameActive);
 
                 updateBoard(game);
                 checkWinner(game);
@@ -549,18 +609,23 @@
             p1.classList.remove('active');
             p2.classList.remove('active');
             
+            if (!game.gameActive) {
+                updateStatus('⏳ Waiting for Player 2...');
+                return;
+            }
+            
             if (game.currentPlayer === 'X') {
                 p1.classList.add('active');
-                if (gameState.playerSymbol === 'X' && game.gameActive) {
+                if (gameState.playerSymbol === 'X') {
                     updateStatus('🎯 Your turn!');
-                } else if (game.gameActive) {
+                } else {
                     updateStatus('⏳ Opponent\'s turn...');
                 }
             } else {
                 p2.classList.add('active');
-                if (gameState.playerSymbol === 'O' && game.gameActive) {
+                if (gameState.playerSymbol === 'O') {
                     updateStatus('🎯 Your turn!');
-                } else if (game.gameActive) {
+                } else {
                     updateStatus('⏳ Opponent\'s turn...');
                 }
             }
@@ -592,6 +657,8 @@
         }
 
         function showWinner(winner, winPattern = null) {
+            log("Game Over - Winner: " + winner);
+            
             const messageDiv = document.getElementById('winnerMessage');
             
             if (winPattern) {
@@ -604,7 +671,7 @@
             if (winner) {
                 messageDiv.className = 'winner-message';
                 const isWinner = winner === gameState.playerSymbol;
-                messageDiv.textContent = isWinner ? '🎉 You Win! Congratulations!' : '😢 You Lost! Better luck next time!';
+                messageDiv.textContent = isWinner ? '🎉 You Win!' : '😢 You Lost!';
                 messageDiv.style.background = isWinner ? 
                     'linear-gradient(135deg, #00b894 0%, #00cec9 100%)' : 
                     'linear-gradient(135deg, #ff7675 0%, #d63031 100%)';
@@ -626,7 +693,7 @@
         function copyGameCode() {
             const code = gameState.gameCode;
             navigator.clipboard.writeText(code).then(() => {
-                alert('✅ Game code copied: ' + code);
+                alert('✅ Code copied: ' + code);
             });
         }
 
@@ -643,6 +710,8 @@
                 
                 const cells = document.querySelectorAll('.cell');
                 cells.forEach(cell => cell.classList.remove('winner'));
+                
+                log("🔄 Game reset");
             }
         }
 
